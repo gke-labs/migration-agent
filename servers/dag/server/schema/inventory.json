@@ -1,0 +1,662 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EKS Discovery Inventory",
+  "description": "Ground-truth inventory of the source EKS estate. Extraction workers emit partial fragments conforming to this schema; the merger combines fragments into one document. The clusters, triggers, storage, observability, findings, escalations and notes sections are worker-authored analysis (data_dependencies is NOT — it is harvested deterministically before extraction and restored over anything a worker writes, so do not populate it): their objects stay open so the scan can record more than is specified here, but the facts the discovery validation checkpoint promises are required here (via the nested required arrays), because nothing else enforces them. The 'triggers' object drives the landing-zone decisions (resolve_lz_decision). The images, render_targets, source, schema_version and generated_at sections are a forward-compatible passthrough for a future deterministic image inventory (a replication step that consumes images[] with registry == \"ecr\", preferring digest when pinned, and reports every render_targets[] entry with status != \"rendered\" as the unverified remainder); they are optional and are not produced by the current map-reduce discovery pipeline.",
+  "type": "object",
+  "properties": {
+    "clusters": {
+      "type": "array",
+      "description": "One entry per discovered EKS cluster. Objects are open — the scan collects more than the required fields — but the fields the discovery validation checkpoint promises are required (in the nested workloads.namespaces / workloads.irsa_bindings entries) so a half-populated inventory cannot be saved.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "kubernetes_version": { "type": ["string", "null"] },
+          "version": { "type": ["string", "null"] },
+          "endpoint_public_access": { "type": ["boolean", "null"] },
+          "endpoint_private_access": { "type": ["boolean", "null"] },
+          "authentication_mode": {
+            "type": ["string", "null"],
+            "enum": ["API", "API_AND_CONFIG_MAP", "CONFIG_MAP", null]
+          },
+          "secrets_kms_key_arn": {
+            "type": ["string", "null"],
+            "description": "KMS key from aws_eks_cluster encryption_config covering \"secrets\" — the ARN, or the Terraform reference when no literal is declared. Absent when the IaC declares no envelope encryption."
+          },
+          "vpc_id": { "type": ["string", "null"] },
+          "subnets": { "type": "array", "items": { "type": "string" } },
+          "region": { "type": ["string", "null"] },
+          "source_files": { "type": "array", "items": { "type": "string" } },
+          "workloads": {
+            "type": "object",
+            "properties": {
+              "namespaces": {
+                "type": "array",
+                "description": "Every namespace carries a workload count, even if zero.",
+                "items": {
+                  "type": "object",
+                  "required": ["name", "deployments"],
+                  "properties": {
+                    "name": { "type": "string" },
+                    "deployments": { "type": "integer", "minimum": 0 }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "irsa_bindings": {
+                "type": "array",
+                "description": "Every IRSA ServiceAccount names the IAM role it assumes.",
+                "items": {
+                  "type": "object",
+                  "required": ["namespace", "sa", "role_arn"],
+                  "properties": {
+                    "namespace": { "type": "string" },
+                    "sa": { "type": "string" },
+                    "role_arn": { "type": "string" }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "required": ["name"],
+        "additionalProperties": true
+      }
+    },
+    "nodegroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "cluster": { "type": ["string", "null"] },
+          "instance_types": { "type": "array", "items": { "type": "string" } },
+          "gpu": { "type": ["boolean", "null"] },
+          "capacity_type": { "type": ["string", "null"] },
+          "source_files": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["name"],
+        "additionalProperties": true
+      }
+    },
+    "addons": {
+      "type": "array",
+      "description": "EKS addons and platform components detected in the IaC (aws_eks_addon resources, helm charts, telltale annotations).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": ["string", "null"] },
+          "evidence": { "type": "array", "items": { "type": "string" } },
+          "source_files": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["name"],
+        "additionalProperties": true
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "properties": {
+        "karpenter": { "type": "boolean" },
+        "cluster_autoscaler": { "type": "boolean" },
+        "evidence": { "type": "array", "items": { "type": "string" } },
+        "karpenter_nodepools": {
+          "type": ["array", "null"],
+          "description": "One entry per karpenter.sh NodePool or Provisioner the source declares, recorded as written. Workers fill name, kind, api_version, requirements, weight, taints, labels, limits, disruption, node_class_ref and source_files; the merger merges entries by kind and name (two same-named objects from different directories stay apart), derives capacity_types, instance_families, architectures and requirements_unreduced from the requirements (a worker-filled value is overwritten), and a non-empty list sets triggers.karpenter. Empty when the source declares no NodePool.",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "description": "metadata.name of the NodePool or Provisioner." },
+              "kind": { "type": ["string", "null"], "enum": ["NodePool", "Provisioner", null], "description": "The object kind as written; null when the source states no literal kind (a pool declared through Helm values)." },
+              "api_version": { "type": ["string", "null"], "description": "apiVersion as written (karpenter.sh/v1beta1)." },
+              "requirements": {
+                "type": ["array", "null"],
+                "description": "spec.template.spec.requirements (NodePool) or spec.requirements (Provisioner), copied as written.",
+                "items": {
+                  "type": "object",
+                  "required": ["key"],
+                  "properties": {
+                    "key": { "type": "string" },
+                    "operator": { "type": ["string", "null"] },
+                    "values": { "type": ["array", "null"], "items": { "type": ["string", "number", "boolean"] } }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "capacity_types": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Derived by the merger from the karpenter.sh/capacity-type requirement's values when its operator is In; workers leave it empty." },
+              "instance_families": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Derived by the merger from karpenter.k8s.aws/instance-family In values; workers leave it empty." },
+              "architectures": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Derived by the merger from kubernetes.io/arch In values; workers leave it empty." },
+              "requirements_unreduced": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Derived by the merger: the keys among karpenter.sh/capacity-type, karpenter.k8s.aws/instance-family and kubernetes.io/arch whose requirement uses an operator other than In (NotIn, Exists, DoesNotExist, Gt, Lt), so an empty derived list is not read as 'no constraint'." },
+              "weight": { "type": ["integer", "string", "null"], "description": "spec.weight as written." },
+              "taints": {
+                "type": ["array", "null"],
+                "description": "spec.template.spec.taints and startupTaints (startup: true), as written.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": { "type": "string" },
+                    "value": { "type": ["string", "number", "boolean", "null"] },
+                    "effect": { "type": ["string", "null"] },
+                    "startup": { "type": "boolean" }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "labels": { "type": ["object", "null"], "description": "spec.template.metadata.labels, keys and values as written.", "additionalProperties": true },
+              "limits": { "type": ["object", "null"], "description": "spec.limits, each value recorded as written; a bare number is stringified ({\"cpu\": \"64\"}). Never parsed here.", "additionalProperties": true },
+              "disruption": {
+                "type": ["object", "null"],
+                "description": "spec.disruption as written (NodePool). For a Provisioner the three policy fields stay null and `provisioner` carries {consolidation_enabled, ttl_seconds_after_empty, ttl_seconds_until_expired} as written.",
+                "properties": {
+                  "consolidation_policy": { "type": ["string", "null"] },
+                  "consolidate_after": { "type": ["string", "integer", "null"] },
+                  "expire_after": { "type": ["string", "integer", "null"] },
+                  "budgets": { "type": ["array", "null"] },
+                  "provisioner": { "type": ["object", "null"], "additionalProperties": true }
+                },
+                "additionalProperties": true
+              },
+              "node_class_ref": {
+                "type": ["object", "null"],
+                "description": "spec.template.spec.nodeClassRef or providerRef; fields absent in the source stay absent.",
+                "properties": {
+                  "group": { "type": ["string", "null"] },
+                  "kind": { "type": ["string", "null"] },
+                  "name": { "type": ["string", "null"] }
+                },
+                "additionalProperties": true
+              },
+              "source_files": { "type": ["array", "null"], "items": { "type": "string" }, "description": "The file(s) this object was read from; the merger tells two same-named pools apart by directory." }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "workloads": {
+      "type": "object",
+      "properties": {
+        "privileged_daemonsets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "namespace": { "type": ["string", "null"] },
+              "reason": { "type": ["string", "null"] },
+              "source_files": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["name"],
+            "additionalProperties": true
+          }
+        },
+        "host_network": { "type": "array", "items": { "type": "string" } },
+        "host_path_volumes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "One \"namespace/workload: path\" string per hostPath volume a pod spec mounts (the owning workload's name, not the volume's), read-only mounts included."
+        },
+        "gpu_tpu_workloads": { "type": "array", "items": { "type": "string" } },
+        "irsa_bindings": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "vpc_peering": { "type": "boolean" },
+        "private_only_endpoints": { "type": "boolean" },
+        "load_balancers": { "type": "array", "items": { "type": "string" } },
+        "ingress_hosts": {
+          "description": "Externally served hostnames, one bare hostname per entry (Ingress rule hosts, ALB/ELB host rules). These become the shared Gateway's listener hostnames verbatim, so record the hostname alone - no paths, no schemes, no objects.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "evidence": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "storage": {
+      "description": "Storage discovered in the source. Accepts either the CSI-driver summary this pipeline emits (ebs_csi / efs_csi / storage_classes) or a resource-level StorageClass/PV/PVC list.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ebs_csi": { "type": "boolean" },
+            "efs_csi": { "type": "boolean" },
+            "storage_classes": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "array",
+          "description": "StorageClasses, PersistentVolumes and PersistentVolumeClaims found in the source. Consumed by storage translation.",
+          "items": {
+            "type": "object",
+            "required": ["kind", "name"],
+            "properties": {
+              "kind": { "enum": ["storage_class", "persistent_volume", "persistent_volume_claim"] },
+              "name": { "type": "string" },
+              "provisioner": { "type": ["string", "null"] },
+              "access_modes": { "type": "array", "items": { "type": "string" } },
+              "reclaim_policy": { "type": ["string", "null"] },
+              "size": { "type": ["string", "null"] }
+            },
+            "additionalProperties": true
+          }
+        }
+      ]
+    },
+    "data_dependencies": {
+      "type": "array",
+      "description": "Passthrough: managed data services the workloads depend on, harvested deterministically by the scan pipeline (discovery_init_1/datastores.py) before extraction — never LLM-written, and carried across extraction re-runs by SCAN_OWNED_KEYS. Engine-change migrations are escalations, so this section is what the assessment grades them from. `consumers` is the field the workload data gate reads to decide which components are held at their ship gate: discovery_init_1/consumers.py populates it, exports.derive_data_gate projects it into the member-readable channel, and servers/phases/workload/datagate joins it against a component's confirmed scope.",
+      "items": {
+        "type": "object",
+        "required": ["service", "identifier"],
+        "properties": {
+          "service": {
+            "description": "Normalized service name. Derived from the Terraform resource type, the module source, or the ARN service field; the harvester emits only services it recognizes; an unrecognized resource type or ARN namespace is skipped, so 'other' is reserved for entries written by hand. DocumentDB and Neptune share the rds ARN namespace, so they are distinguished by `engine`.",
+            "enum": ["rds", "aurora", "docdb", "neptune", "dynamodb", "elasticache", "memorydb",
+                     "s3", "efs", "fsx", "kinesis", "firehose", "msk", "mq", "sqs", "sns",
+                     "eventbridge", "opensearch", "redshift", "secretsmanager", "ssm", "other"]
+          },
+          "identifier": { "type": "string" },
+          "address": {
+            "type": ["string", "null"],
+            "description": "Terraform block address declaring this resource (module.orders_rds, aws_mq_broker.mq). What `identifier` falls back to when the files state no name, but recorded in its own right because it is the stable key consumers are joined on: an RDS whose identifier came from db_name no longer resembles the block that declares it. For a referenced entry — known from a literal ARN or endpoint, declared nowhere in the repository — this is the ARN itself, or the canonical endpoint (`orders.c9ak….us-east-1.rds.amazonaws.com`, `s3://bucket`, a queue URL) when no ARN was seen, so the review's correction tools have a stable, unique handle for it; a declared block's address replaces it when the two fold into one entry. For an inferred entry (a guess) and for one added by hand it is `<service>:<identifier>` (`s3:acme-invoice-archive`). Everything but a block address is a literal handle: unique on its own, keyed with no directory."
+          },
+          "engine": { "type": ["string", "null"] },
+          "engine_version": { "type": ["string", "null"] },
+          "multi_az": { "type": ["boolean", "null"] },
+          "allocated_storage": {
+            "type": ["number", "null"],
+            "description": "Declared size in GiB where the declaration states one. Feeds the downtime-window estimate; null when the declaration does not size the store (Aurora, DynamoDB, S3)."
+          },
+          "storage_type": { "type": ["string", "null"] },
+          "region": { "type": ["string", "null"],
+            "description": "The region the resource lives in, read from its ARN when it was found by one; null for a declared resource, whose region is the provider's and only known after apply — unless a literal ARN folds onto it, in which case the ARN's region is recorded and, when the estate's own regions could not be verified, a note says the ARN may name a same-named resource elsewhere." },
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The 12-digit AWS account the resource lives in, read from its ARN when it was found by one — an S3 ARN never states it. Null for a declared resource unless a literal ARN also names it and folds onto it; otherwise its account is only known after apply. An ARN in an account the estate's provider blocks name as not its own never folds onto a declaration; when the provider blocks name no account at all, the fold happens and the entry carries a note that the ARN may name a same-named resource elsewhere. Compared against the accounts the estate's own `aws` provider blocks state (allowed_account_ids, or an assume_role role ARN): a referenced entry in an account the provider blocks do not name carries a cross-account note, which is the assessment's worst readiness band for RDS."
+          },
+          "arn": {
+            "type": ["string", "null"],
+            "description": "Present when the resource was found as a literal ARN (IAM policy, IRSA module argument, Helm value, ConfigMap, a chart's values or a manifest), normalized to the resource itself — an object path or a table index is stripped. Null for a resource declared in Terraform and never named by ARN, since its ARN is only known after apply."
+          },
+          "endpoint": {
+            "type": ["string", "null"],
+            "description": "The canonical endpoint this resource was found by — an RDS or cache hostname, a queue URL, `s3://bucket` — when a literal one was seen (a ConfigMap, a Helm value, a manifest's env, a connection URL read for its host). It is the entry's address until an ARN sighting takes over as the handle, and stays here afterwards so a correction or a reported outcome recorded under the URL still reaches the entry, as `arn` survives a fold onto a declaration. Null when no endpoint was seen."
+          },
+          "identifier_is_db_name": {
+            "type": "boolean",
+            "description": "RDS instances only: the identifier is the declaration's `db_name` (or deprecated `name`), taken because the instance identifier is an expression or unstated. A database name is never an instance identifier, so no `db:` ARN folds onto this entry and the merge keys it on its block address. Absent otherwise."
+          },
+          "console_form": {
+            "type": ["string", "null"],
+            "description": "Secrets Manager only: the console spelling of the name — with the six-character suffix AWS appends — that this entry folded in, when a literal ARN carried one. `identifier` and `arn` keep the bare name, so this is the one record of WHICH console form was taken for this secret; a second console form with another suffix is never folded onto it, because a secret has one suffix, and stands as its own entry with a note. Null for every other service, and for a secret only ever named without its suffix."
+          },
+          "detection": {
+            "description": "How this entry was found. 'declared' — defined in the scanned repository, so its properties are known. 'referenced' — a literal ARN or endpoint names it (in an IAM policy, an IRSA module's arguments, a Helm value, a ConfigMap, a variable default, a chart's values, a manifest) but no declaration here states that name, so it was provisioned out of band — or declared under a variable-built name the scan cannot resolve — and its properties are unknown; these are the ones that get forgotten. Wildcard ARNs and ARNs built from variables are noted in data_dependency_scan_notes, never recorded. 'inferred' — a bare name a configuration key types (INVOICE_BUCKET=acme-invoice-archive), recorded as a question rather than a fact: disposition undecided, gates nothing, and the data review confirms or dismisses it. 'human_review' — a confirmed guess, or an entry a reviewer added by hand because nothing in the files proposed it.",
+            "enum": ["declared", "referenced", "inferred", "human_review"]
+          },
+          "declared_in_repo": { "type": ["boolean", "null"] },
+          "module_source": {
+            "type": ["string", "null"],
+            "description": "The module `source` string when the resource was declared through a module rather than a raw resource block."
+          },
+          "disposition": {
+            "description": "What the migration does with it. Only 'migrate' should gate a workload downstream; 'rebuild' (an empty cache is fine) and 'keep-in-aws' (a legitimate choice, with cross-cloud egress cost) do not. 'undecided' is the honest default for a service the harvester recognized but has no plan for. 'keep-in-aws' is reserved for a human: the harvester never emits it, and annotate_data_dependency is how it is set — at the data review, or at STATE_DEPLOYMENT_DATA_MIGRATION, where it is the exit for a service that turns out not to be movable.",
+            "enum": ["migrate", "rebuild", "replatform", "escalate", "keep-in-aws", "undecided"]
+          },
+          "evidence": {
+            "type": "array",
+            "description": "Repo-relative file locators the entry was derived from, as with every other discovered fact.",
+            "items": { "type": "string" }
+          },
+          "consumers": {
+            "type": "array",
+            "description": "Workloads that reference this resource, resolved deterministically from Terraform by discovery_init_1/consumers.py, plus the ones a human attached at the data review (STATE_DISCOVERY_DATA_REVIEW; discovery_init_1/overrides.py replays them over every later scan). An empty list means nothing in the scanned files links a workload to it and nobody has attached one — NOT that nothing uses it. Never populated by name similarity: this section gates a developer's pipeline, and a wrong consumer stops the wrong team. Name similarity is only ever offered to that reviewer as a ranked guess.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "workload": { "type": "string", "description": "Helm release name, Kubernetes resource name, or service account name." },
+                "kind": { "type": "string", "description": "What the consumer is: a Terraform resource type (helm_release, kubernetes_secret), service_account for an IRSA binding, or 'workload' for a human-attached consumer the reviewer did not further classify." },
+                "namespace": { "type": ["string", "null"], "description": "Kubernetes namespace when the declaration states it literally; null when it is an expression." },
+                "source_path": { "type": ["string", "null"], "description": "Repository-relative chart directory when the consumer is a local chart. The link from a data dependency to a developer's component scope." },
+                "detection": { "type": "string", "enum": ["terraform_wiring", "irsa", "config_value", "human_review"], "description": "Which reference chain produced this link: a Kubernetes-deploying resource reaching the datastore through a module output, or an IAM role whose subject names a service account and which names the resource either through an attached policy or in its own arguments. 'config_value' — the workload's own YAML configuration (a chart's values, a manifest env var, a ConfigMap or Secret manifest key) states the resource's ARN, endpoint or name literally; for an inferred entry the value is what the guess is about. A literal in a Terraform kubernetes_config_map or helm_release block arrives through the Terraform chain as 'terraform_wiring'. 'human_review' is none of these — a reviewer asserted the link at STATE_DISCOVERY_DATA_REVIEW because the repository does not state it. A gate reading this section can tell the three apart, which is the point of recording it." },
+                "evidence": { "type": "string", "description": "Repository-relative file declaring the reference. For a 'human_review' consumer there is no such file — that is why it was attached by hand — so it names the review and the reviewer instead." },
+                "note": { "type": "string", "description": "Why the reviewer attached this consumer, when they said ('human_review' entries) — or, on a consumer the harvest carried from a replica entry onto its primary, which replica ARN the workload reaches the resource through and where to withdraw it." },
+                "via_replica": { "type": "string", "description": "Present on a consumer copied from the estate's own replica entry onto the primary declaration: the replica entry's address (its ARN). Rejecting the workload on that entry withdraws both copies; rejecting it on the primary withdraws this copy only." }
+              },
+              "required": ["workload", "kind", "detection", "evidence"],
+              "additionalProperties": true
+            }
+          },
+          "notes": {
+            "type": "array",
+            "description": "Why a field is null rather than guessed, in the derivation-notes discipline of the exports object.",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "data_dependency_scan_notes": {
+      "type": "array",
+      "description": "Passthrough: what the data-dependency scan did NOT cover — files the confirmed scope excluded, files it could not read, and the dialects it does not parse — and what it saw but did not record: literal ARNs with a wildcard in the resource name, ARNs whose name is built from a variable, ARN-shaped strings it could not read, and ARNs stated only in prose (a `description`). Persisted rather than only reported, because an empty data_dependencies with no record of why is indistinguishable from an estate that genuinely has none.",
+      "items": { "type": "string" }
+    },
+    "cluster_dns": {
+      "type": "object",
+      "description": "Passthrough: the cluster DNS configuration as the repository declares it, copied verbatim by the scan pipeline (discovery_init_1/clusterdns.py) — never LLM-written, never interpreted, carried across extraction re-runs by SCAN_OWNED_KEYS. Each source is a CoreDNS artifact that carries text to translate: the managed add-on's configuration_values (on the aws_eks_addon resource, or inside an EKS module's cluster_addons / addons / eks_addons map), or a coredns / node-local-dns ConfigMap in kube-system (a kubernetes_config_map / _v1 / _v1_data resource, the inline object of a kubernetes_manifest, the yaml_body of a kubectl_manifest, or plain YAML). Empty ({}) unless at least one source carries text; a default add-on, an unread expression or a Helm chart are cluster_dns_scan_notes instead. Consumers: the readiness report and the assessment, and the landing-zone planner's cluster-dns translation unit, whose worker reads `text` against landingzone/knowledge/cluster-dns-translation.md and whose output translation_validate_3/clusterdns_contract.py checks against the same text.",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "name", "directory", "text", "evidence"],
+            "properties": {
+              "kind": { "type": "string", "enum": ["eks_addon", "eks_module_addon", "kubernetes_config_map", "configmap"] },
+              "name": { "type": "string", "description": "coredns or node-local-dns." },
+              "address": { "type": ["string", "null"], "description": "Terraform address when the source is a resource or module block." },
+              "path": { "type": ["string", "null"], "description": "Repository-relative file when the source is a plain manifest." },
+              "directory": { "type": "string" },
+              "form": { "type": ["string", "null"], "description": "How the text was written: string, heredoc, expression (an object literal such as jsonencode({...}), recorded raw) or manifest." },
+              "addon_version": { "type": ["string", "null"] },
+              "resolve_conflicts_on_update": { "type": ["string", "null"] },
+              "text": { "type": "string", "description": "The configuration_values or Corefile text, verbatim (a <<- heredoc dedented as Terraform would), capped at 16 KB with a note when truncated." },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "cluster_dns_scan_notes": {
+      "type": "array",
+      "description": "Passthrough: what the cluster DNS scan saw but did not record as a source, and what it did not cover — a managed coredns add-on at its defaults, a Corefile behind a variable or a file() the scan does not follow, a Helm release of a CoreDNS chart, a CoreDNS Deployment's pod settings, files the scope excluded or chart roots skipped. Persisted for the same reason data_dependency_scan_notes is.",
+      "items": { "type": "string" }
+    },
+    "address_space": {
+      "type": "object",
+      "description": "Passthrough: the source network address space as the repository declares it, harvested deterministically by the scan pipeline (discovery_init_1/addressspace.py) — never LLM-written, carried across extraction re-runs by SCAN_OWNED_KEYS. Three dialects are read: Terraform (aws_vpc, aws_subnet, the VPC and EKS community modules, aws_eks_cluster, aws_route and the route table, VPN static route and transit gateway route resources), eksctl ClusterConfig YAML and CloudFormation templates. A CIDR is recorded only when the files state it — a literal, a variable default or a locals value followed through var./local. references within a Terraform module directory (auto-loaded .tfvars and .tfvars.json of the root module override a default; for a local module, the arguments its instance passes, one entry per instance when it is instantiated more than once), a cidrsubnet() over one of those, or a declared VPC's own primary range named through its attribute (aws_vpc.<name>.cidr_block, module.<name>.vpc_cidr_block, the one resource attribute followed); every other expression is an `unresolved` entry, never a guess. Empty ({}) when the files declare none of it; what was not scanned is in address_space_scan_notes. Consumers: the landing-zone design step, which proposes target ranges that do not overlap these and echoes both with the design workspace coordinates; the readiness report.",
+      "properties": {
+        "vpcs": {
+          "type": "array",
+          "description": "One entry per VPC declared: an aws_vpc resource, a VPC module instance, an eksctl ClusterConfig's vpc (eksctl's default 192.168.0.0/16 when neither vpc.cidr nor vpc.id is declared and no subnet is named by id, marked `defaulted`) or a CloudFormation AWS::EC2::VPC.",
+          "items": {
+            "type": "object",
+            "required": ["name", "address", "path", "form", "cidr", "secondary_cidrs", "cluster_vpc", "evidence"],
+            "properties": {
+              "name": { "type": "string" },
+              "address": { "type": ["string", "null"], "description": "Terraform address, eksctl `ClusterConfig:<path>#vpc`, or the CloudFormation logical id." },
+              "path": { "type": "string" },
+              "directory": { "type": "string" },
+              "form": { "type": "string", "enum": ["resource", "module", "eksctl", "cloudformation"] },
+              "cidr": { "type": ["string", "null"], "description": "Primary IPv4 CIDR; null when the files do not state it (an IPAM pool, an existing VPC named by id, an unresolved expression)." },
+              "secondary_cidrs": { "type": "array", "items": { "type": "string" } },
+              "cluster_vpc": { "type": ["boolean", "null"], "description": "Whether a declared cluster sits in this VPC. Decided only from references (vpc_id, or subnet_ids followed to their VPC, within a module directory or through a local module instance); null when the files declare no cluster, or when some cluster's VPC could not be followed or has no stated range, so an unknown is never written as false." },
+              "defaulted": { "type": "boolean", "description": "Present and true only for the eksctl default VPC CIDR." },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": true
+          }
+        },
+        "subnets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "address", "path", "form", "cidr", "tier", "vpc", "evidence"],
+            "properties": {
+              "name": { "type": "string" },
+              "address": { "type": ["string", "null"] },
+              "path": { "type": "string" },
+              "form": { "type": "string", "enum": ["resource", "module", "eksctl", "cloudformation"] },
+              "cidr": { "type": ["string", "null"] },
+              "availability_zone": { "type": ["string", "null"] },
+              "tier": { "type": ["string", "null"], "description": "private, public, or the VPC module list the subnet came from (intra, database, ...); null when the files do not say." },
+              "vpc": { "type": ["string", "null"], "description": "The address of the vpcs entry this subnet belongs to." },
+              "vpc_path": { "type": ["string", "null"], "description": "The path of that vpcs entry, so a namesake VPC in another place is not mistaken for it." },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": true
+          }
+        },
+        "clusters": {
+          "type": "array",
+          "description": "What each declared cluster's network is: one entry per aws_eks_cluster, EKS module instance, eksctl ClusterConfig or AWS::EKS::Cluster.",
+          "items": {
+            "type": "object",
+            "required": ["name", "address", "path", "form", "vpc", "subnets", "service_ipv4_cidr", "ip_family", "public_access_cidrs", "remote_node_cidrs", "remote_pod_cidrs", "evidence"],
+            "properties": {
+              "name": { "type": ["string", "null"] },
+              "address": { "type": ["string", "null"] },
+              "path": { "type": "string" },
+              "form": { "type": "string", "enum": ["resource", "module", "eksctl", "cloudformation"] },
+              "vpc": { "type": ["string", "null"], "description": "The address of the vpcs entry the cluster sits in, from vpc_id or through its subnets." },
+              "vpc_path": { "type": ["string", "null"], "description": "The path of that vpcs entry, so a namesake VPC in another place is not mistaken for it." },
+              "subnets": { "type": "array", "items": { "type": "string" } },
+              "service_ipv4_cidr": { "type": ["string", "null"], "description": "The Kubernetes service range as declared; null when unset (EKS then picks one at creation, usually 10.100.0.0/16 or 172.20.0.0/16, another block for a cluster with remote networks; the files do not state it)." },
+              "ip_family": { "type": ["string", "null"] },
+              "public_access_cidrs": { "type": "array", "items": { "type": "string" }, "description": "CIDRs allowed at the public API endpoint — the target's authorized networks." },
+              "remote_node_cidrs": { "type": "array", "items": { "type": "string" }, "description": "Hybrid nodes' on-premises node ranges (remote_network_config)." },
+              "remote_pod_cidrs": { "type": "array", "items": { "type": "string" } },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": true
+          }
+        },
+        "routes": {
+          "type": "array",
+          "description": "Non-default routes to any target (a peering connection, a transit gateway, a VPN, an appliance instance, a gateway, an endpoint): ranges the source VPC reaches, which the target must not reuse.",
+          "items": {
+            "type": "object",
+            "required": ["destination", "via", "address", "path", "evidence"],
+            "properties": {
+              "destination": { "type": "string" },
+              "via": { "type": "string" },
+              "address": { "type": ["string", "null"] },
+              "path": { "type": "string" },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": true
+          }
+        },
+        "unresolved": {
+          "type": "array",
+          "description": "Ranges the files build from something the scan does not follow — a variable with no default, a data source, a for expression, an environment placeholder, a CloudFormation intrinsic other than a Ref to a parameter Default (which is followed; a value a parent stack passes is not read) — with the expression spelled out. Each is a question for the user, not a value — except the ones a stated VPC range, a VPC whose own range is already among the questions, or a public-endpoint allow list covers, which addressspace.triage_unresolved sets aside so neither the scan summary nor the design asks for them.",
+          "items": {
+            "type": "object",
+            "required": ["address", "path", "argument", "expression"],
+            "properties": {
+              "address": { "type": ["string", "null"] },
+              "path": { "type": "string" },
+              "argument": { "type": "string" },
+              "expression": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "address_space_scan_notes": {
+      "type": "array",
+      "description": "Passthrough: what the address-space scan did NOT cover — files the confirmed scope excluded or chart roots skipped, the dialects it does not parse (.tf.json, CDK, Pulumi, Helm templates), .tfvars files Terraform does not load automatically, files it could not read. Persisted for the same reason data_dependency_scan_notes is.",
+      "items": { "type": "string" }
+    },
+    "observability": {
+      "type": "object",
+      "description": "CloudWatch log groups, Prometheus workspaces, KMS keys and secret providers. Consumed by observability translation.",
+      "additionalProperties": true
+    },
+    "triggers": {
+      "type": "object",
+      "description": "Decision triggers consumed by the landing-zone phase (resolve_lz_decision decision_ids). Individual fragments report only the triggers their chunk revealed; the merger emits all four explicitly — defaulting false, OR'd across fragments and derived from structured evidence — so the complete inventory always distinguishes a false trigger from one that was never looked for, which the downstream states branch on.",
+      "properties": {
+        "karpenter": { "type": "boolean" },
+        "privileged_daemonsets": { "type": "boolean" },
+        "gpu_tpu": { "type": "boolean" },
+        "vpc_peering": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "findings": {
+      "type": "array",
+      "description": "Free-form notable facts a worker found that do not fit the structured fields.",
+      "items": { "type": "string" }
+    },
+    "sources": {
+      "type": "array",
+      "description": "Files that contributed to this inventory or fragment.",
+      "items": { "type": "string" }
+    },
+    "escalations": { "type": "array" },
+    "notes": {},
+    "schema_version": {
+      "const": "1.0",
+      "description": "Passthrough: version tag for a future deterministic image-inventory writer. Not emitted by the current discovery pipeline."
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "Passthrough: RFC 3339 timestamp of the scan that produced the machine sections."
+    },
+    "source": {
+      "type": "object",
+      "description": "Passthrough: provenance of the local source checkout that was scanned.",
+      "required": ["root_dir"],
+      "properties": {
+        "root_dir": {
+          "type": "string",
+          "description": "Root directory of the local source checkout that was scanned."
+        },
+        "source_repo_url": { "type": ["string", "null"] },
+        "source_branch": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "images": {
+      "type": "array",
+      "description": "Deduplicated container image references, consumed by the deployment-phase replication step (entries with registry == \"ecr\"). Deduped by full ref; provenance entries are unioned; replication outcomes are written back per entry.",
+      "items": {
+        "type": "object",
+        "required": ["ref", "registry", "pinned_by", "provenance"],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "The image reference exactly as found, e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/payments/api:1.4.2"
+          },
+          "registry": { "enum": ["ecr", "gcr_ar", "dockerhub", "ghcr", "quay", "other"] },
+          "repository": { "type": "string" },
+          "tag": { "type": ["string", "null"] },
+          "digest": { "type": ["string", "null"] },
+          "pinned_by": { "enum": ["tag", "digest", "tag_and_digest", "none"] },
+          "provenance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": { "enum": ["literal", "rendered"] },
+                "file": {
+                  "type": "string",
+                  "description": "For kind=literal: repo-relative path of the file containing the reference."
+                },
+                "render_target": {
+                  "type": "string",
+                  "description": "For kind=rendered: id of the render_targets[] entry whose output contained the reference."
+                },
+                "values_file": {
+                  "type": ["string", "null"],
+                  "description": "For kind=rendered Helm targets: the values file used for the render that produced this reference. Null for the defaults-only run and for kustomize targets."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "replication": {
+            "type": "object",
+            "description": "Outcome written by the deployment-phase replicate_images action, or by mark_replication_complete when the user asserts a self-service/manual copy is done. Absent until replication has run for this entry.",
+            "required": ["status"],
+            "properties": {
+              "status": {
+                "enum": ["replicated", "replication_failed", "self_service", "abandoned"],
+                "description": "'replicated' — the copy exists. 'self_service' — a runbook was written and the copy has not been observed. 'replication_failed' — the server's own copy failed; the error is alongside. 'abandoned' — a decision that this image will not be copied and stays in ECR, with a reason; the counterpart of a data service recorded 'keep-in-aws'. Only 'replicated' lets workload translation rewrite the reference."
+              },
+              "reason": { "type": "string", "description": "For status=abandoned: why the copy will not be made. Required when abandoning." },
+              "previous": {
+                "type": "object",
+                "description": "The outcome this record replaced, when a human overrode it: the server's own copy failed, or somebody abandoned the image, and it was later made good. Kept so the ledger still shows what broke and that a person repaired it. Written by mark_replication_complete, and by abandon_image_replication when the copy it cancels had already failed.",
+                "properties": {
+                  "status": { "type": "string" },
+                  "error": { "type": "string" },
+                  "reason": { "type": "string" },
+                  "abandoned_by": { "type": "string" },
+                  "abandoned_at": { "type": "string" }
+                },
+                "additionalProperties": false
+              },
+              "abandoned_by": { "type": "string", "description": "For status=abandoned: who decided." },
+              "abandoned_at": { "type": "string", "description": "For status=abandoned: when, ISO 8601." },
+              "destination": {
+                "type": "string",
+                "description": "The Artifact Registry reference the image was (or is planned to be) copied to."
+              },
+              "error": {
+                "type": "string",
+                "description": "For status=replication_failed: the tail of the skopeo error."
+              },
+              "verified_by": {
+                "enum": ["skopeo_preserve_digests", "user_asserted"],
+                "description": "How status=replicated was established: the server's own digest-preserving skopeo copy, or the user's assertion via mark_replication_complete. Absent on legacy records."
+              },
+              "content_digest": {
+                "type": "string",
+                "description": "The manifest digest of the replicated content, when known: the source digest for digest-pinned server copies (guaranteed equal by --preserve-digests), or a digest the user supplied with their assertion. Never invented; absent when unknown."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "render_targets": {
+      "type": "array",
+      "description": "Passthrough: Helm chart roots and Kustomize roots whose manifests must be rendered to complete the image inventory. One entry per kustomization directory (overlays are individual targets).",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "root", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable identifier: the repo-relative directory of the target."
+          },
+          "type": { "enum": ["helm", "kustomize"] },
+          "root": { "type": "string" },
+          "values_files": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Helm only: values files discovered in the chart directory, each rendered separately."
+          },
+          "status": { "enum": ["pending", "rendered", "unrendered_declined", "render_failed"] },
+          "reason": {
+            "type": ["string", "null"],
+            "description": "Populated for render_failed (error summary) and unrendered_declined."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "State Machine Schema",
+  "description": "JSON Schema for validating GKE Agentic Migration DAG definitions. Enforced at server start-up and in CI.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Name of the state machine."
+    },
+    "version": {
+      "type": "string",
+      "description": "Graph version."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the state machine."
+    },
+    "start_state": {
+      "type": "string",
+      "description": "The initial state ID."
+    },
+    "states": {
+      "type": "object",
+      "description": "Mapping of state IDs to their definitions.",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Z][A-Z0-9_]*$": {
+          "$ref": "#/$defs/state"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["name", "version", "start_state", "states"],
+  "additionalProperties": false,
+  "$defs": {
+    "phase_name": {
+      "type": "string",
+      "description": "Bare phase name; resolved as servers/phases/<phase>/.",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "step_path": {
+      "type": "string",
+      "description": "Repo-root-relative path to the step folder.",
+      "pattern": "^servers/phases/[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$"
+    },
+    "instructions_path": {
+      "type": "string",
+      "description": "Repo-root-relative path to the step's instructions file.",
+      "pattern": "^servers/phases/[a-z][a-z0-9_]*/[a-z][a-z0-9_]*/instructions\\.md$"
+    },
+    "knowledge_doc": {
+      "type": "string",
+      "description": "Bare file name within the phase's knowledge/ directory. Path separators are rejected: the phase supplies the directory.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*\\.md$"
+    },
+    "transitions": {
+      "type": "object",
+      "description": "Outcome name to next state ID. Outcome names are open-ended because they are action-specific (on_pending, on_ssm_creation_required, on_rediscover), but must follow the on_* convention and point at a state ID.",
+      "minProperties": 1,
+      "patternProperties": {
+        "^on_[a-z0-9_]+$": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "state": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "AGENT_TASK",
+            "HITL_ELICITATION",
+            "INTERNAL_TASK_SERVER_MUTATION",
+            "TERMINAL"
+          ]
+        }
+      },
+      "required": ["type"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "AGENT_TASK" } },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "type": true,
+              "phase": { "$ref": "#/$defs/phase_name" },
+              "step": { "$ref": "#/$defs/step_path" },
+              "instructions": { "$ref": "#/$defs/instructions_path" },
+              "knowledge": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "$ref": "#/$defs/knowledge_doc" }
+              },
+              "expected_tool_call": { "type": "string" },
+              "prompt_template": { "type": "string", "minLength": 1 },
+              "transitions": { "$ref": "#/$defs/transitions" }
+            },
+            "required": ["transitions"],
+            "dependentRequired": {
+              "step": ["phase"],
+              "instructions": ["phase", "step"],
+              "knowledge": ["phase"]
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "HITL_ELICITATION" } },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "type": true,
+              "prompt_template": { "type": "string" },
+              "transitions": {
+                "allOf": [
+                  { "$ref": "#/$defs/transitions" },
+                  { "required": ["on_approve", "on_reject"] }
+                ]
+              }
+            },
+            "required": ["prompt_template", "transitions"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "INTERNAL_TASK_SERVER_MUTATION" } },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "type": true,
+              "action": { "type": "string" },
+              "transitions": {
+                "allOf": [
+                  { "$ref": "#/$defs/transitions" },
+                  { "required": ["on_success", "on_failure"] }
+                ]
+              }
+            },
+            "required": ["action", "transitions"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "TERMINAL" } },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "type": true,
+              "status": {
+                "type": "string",
+                "enum": ["SUCCESS", "FAILED"]
+              },
+              "expected_tool_call": { "type": "string" }
+            },
+            "required": ["status"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  }
+}

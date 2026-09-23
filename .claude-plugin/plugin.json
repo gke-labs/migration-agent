@@ -1,0 +1,20 @@
+{
+  "name": "gke-agentic-migration",
+  "displayName": "GKE Agentic Migration",
+  "description": "Migrates workloads from Amazon EKS to Google Kubernetes Engine: discovers the estate, assesses readiness, designs the GKE landing zone, translates manifests and Terraform, and hands operators data-migration runbooks, all driven through an MCP server and a shared migration ledger.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Google LLC"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "kubernetes",
+    "gke",
+    "eks",
+    "migration",
+    "sre",
+    "platform-engineering",
+    "agents",
+    "skills"
+  ]
+}

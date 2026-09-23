@@ -1,0 +1,67 @@
+{
+  "name": "gke-migration-bootstrap",
+  "version": "1.1",
+  "description": "State graph for initializing the GKE Migration GCS state ledger.",
+  "start_state": "STATE_CONFIGURATION_GATHERING",
+  "states": {
+    "STATE_CONFIGURATION_GATHERING": {
+      "type": "AGENT_TASK",
+      "transitions": {
+        "on_tool_call_received": "STATE_ELICIT_LEDGER_CREATION_APPROVAL"
+      }
+    },
+    "STATE_ELICIT_LEDGER_CREATION_APPROVAL": {
+      "type": "HITL_ELICITATION",
+      "prompt_template": "Approve the creation of the GCS ledger bucket '{bucket_name}' with uniform bucket-level access, the managed folders platform/ and workloads/, and IAM grants on it: storage.admin to the admins, objectAdmin on platform/ to the platform engineers, read access to the workspace registry for everyone listed, and — on the single exports.json object at the bucket root (the platform-to-developer channel, which will expose ns/sa-to-GSA pairs and the image map across team lines) — read for everyone listed and publish rights for the platform engineers.",
+      "transitions": {
+        "on_approve": "STATE_GCS_PROVISIONING",
+        "on_reject": "STATE_ABORTED"
+      }
+    },
+    "STATE_GCS_PROVISIONING": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "provision_gcs_bucket",
+      "transitions": {
+        "on_success": "STATE_IAM_PROVISIONING",
+        "on_failure": "STATE_ABORTED"
+      }
+    },
+    "STATE_IAM_PROVISIONING": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "provision_ledger_iam",
+      "transitions": {
+        "on_success": "STATE_WORKSPACE_PROVISIONING",
+        "on_failure": "STATE_ABORTED"
+      }
+    },
+    "STATE_WORKSPACE_PROVISIONING": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "write_workspace_registry",
+      "transitions": {
+        "on_success": "STATE_PLATFORM_PROVISIONING",
+        "on_failure": "STATE_ABORTED"
+      }
+    },
+    "STATE_PLATFORM_PROVISIONING": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "write_platform_state_machine",
+      "transitions": {
+        "on_success": "STATE_WORKSPACE_ADMIN",
+        "on_failure": "STATE_ABORTED"
+      }
+    },
+    "STATE_WORKSPACE_ADMIN": {
+      "type": "AGENT_TASK",
+      "phase": "bootstrap",
+      "step": "servers/phases/bootstrap/bootstrap_admin_2",
+      "instructions": "servers/phases/bootstrap/bootstrap_admin_2/instructions.md",
+      "transitions": {
+        "on_admin_action": "STATE_WORKSPACE_ADMIN"
+      }
+    },
+    "STATE_ABORTED": {
+      "type": "TERMINAL",
+      "status": "FAILED"
+    }
+  }
+}

@@ -1,0 +1,3 @@
+# Antigravity SDK tier (opt-in via --with-agy). Not on the internal mirror;
+# the runner installs this with --index-url https://pypi.org/simple/.
+google-antigravity>=0.1.8

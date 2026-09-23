@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+import os
+import sys
+import subprocess
+from pathlib import Path
+
+# Clean the environment of any malformed BASH_FUNC_ variables to prevent issues in subprocesses
+clean_env = os.environ.copy()
+for key in list(clean_env.keys()):
+    if key.startswith("BASH_FUNC_"):
+        del clean_env[key]
+
+dir_path = Path(__file__).parent.resolve()
+venv_dir = dir_path / ".venv"
+
+if not venv_dir.is_dir():
+    sys.stderr.write("Initializing python virtual environment...\n")
+    try:
+        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True, env=clean_env)
+    except subprocess.CalledProcessError:
+        if venv_dir.exists():
+            import shutil
+            shutil.rmtree(venv_dir)
+        sys.exit(1)
+
+# Run pip install
+pip_exe = venv_dir / "bin" / "pip"
+requirements = dir_path / "requirements.txt"
+try:
+    subprocess.run([str(pip_exe), "install", "--quiet", "--index-url", "https://pypi.org/simple", "-r", str(requirements)], check=True, env=clean_env)
+except subprocess.CalledProcessError:
+    sys.exit(1)
+
+# Exec main.py
+python_exe = venv_dir / "bin" / "python"
+main_py = dir_path / "main.py"
+
+os.execve(str(python_exe), [str(python_exe), str(main_py)] + sys.argv[1:], clean_env)

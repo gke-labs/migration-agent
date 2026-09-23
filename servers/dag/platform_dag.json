@@ -1,0 +1,323 @@
+{
+  "name": "gke-migration-platform",
+  "version": "2.11",
+  "description": "State graph for platform onboarding, repo config, local EKS IaC discovery, and GKE landing zone design.",
+  "start_state": "STATE_CONFIGURE_REPOSITORIES",
+  "states": {
+    "STATE_CONFIGURE_REPOSITORIES": {
+      "type": "AGENT_TASK",
+      "expected_tool_call": "configure_repositories",
+      "transitions": {
+        "on_tool_call_received": "STATE_CHECK_SSM_REGISTRATION"
+      }
+    },
+    "STATE_CHECK_SSM_REGISTRATION": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "check_ssm_registration",
+      "transitions": {
+        "on_ssm_creation_required": "STATE_ELICIT_SSM_CREATION_APPROVAL",
+        "on_success": "STATE_VERIFY_REPOSITORIES",
+        "on_failure": "STATE_CONFIGURE_REPOSITORIES"
+      }
+    },
+    "STATE_ELICIT_SSM_CREATION_APPROVAL": {
+      "type": "HITL_ELICITATION",
+      "prompt_template": "Approve the creation of Secure Source Manager repository '{ssm_repository}' under instance '{ssm_instance}' in project '{project_id}'.",
+      "transitions": {
+        "on_approve": "STATE_CREATE_SSM_REPOSITORY",
+        "on_reject": "STATE_CONFIGURE_REPOSITORIES"
+      }
+    },
+    "STATE_CREATE_SSM_REPOSITORY": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "create_ssm_repository",
+      "transitions": {
+        "on_pending": "STATE_CREATE_SSM_REPOSITORY",
+        "on_success": "STATE_VERIFY_REPOSITORIES",
+        "on_failure": "STATE_CONFIGURE_REPOSITORIES"
+      }
+    },
+    "STATE_VERIFY_REPOSITORIES": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "verify_repositories",
+      "transitions": {
+        "on_success": "STATE_DISCOVERY_LIVE",
+        "on_failure": "STATE_CONFIGURE_REPOSITORIES"
+      }
+    },
+    "STATE_DISCOVERY_LIVE": {
+      "type": "AGENT_TASK",
+      "phase": "discovery",
+      "step": "servers/phases/discovery/discovery_livescan_0",
+      "instructions": "servers/phases/discovery/discovery_livescan_0/instructions.md",
+      "expected_tool_call": "discover_and_dump_all_clusters",
+      "transitions": {
+        "on_tool_call_received": "STATE_DISCOVERY"
+      }
+    },
+    "STATE_DISCOVERY": {
+      "type": "AGENT_TASK",
+      "phase": "discovery",
+      "step": "servers/phases/discovery/discovery_init_1",
+      "instructions": "servers/phases/discovery/discovery_init_1/instructions.md",
+      "expected_tool_call": "discover_configuration_files",
+      "transitions": {
+        "on_tool_call_received": "STATE_DISCOVERY_IMAGE_SCAN"
+      }
+    },
+    "STATE_DISCOVERY_IMAGE_SCAN": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "scan_image_references",
+      "transitions": {
+        "on_success": "STATE_DISCOVERY_RENDER_APPROVAL",
+        "on_no_render_targets": "STATE_DISCOVERY_SCOPING",
+        "on_failure": "STATE_DISCOVERY_SCOPING"
+      }
+    },
+    "STATE_DISCOVERY_RENDER_APPROVAL": {
+      "type": "HITL_ELICITATION",
+      "prompt_template": "Container image discovery found {helm_chart_count} Helm chart(s) and {kustomize_root_count} Kustomize root(s) that must be rendered locally to complete the image inventory. Rendering runs 'helm template' and 'kubectl kustomize' on this workstation (binaries required; no cluster access). A chart that declares dependencies is prepared with 'helm dependency build' first, which downloads those charts from their repositories and writes charts/ and Chart.lock inside the scanned source checkout. Approve rendering? Declining continues the migration with literal image references only; unrendered targets will be listed in the inventory for later follow-up.",
+      "transitions": {
+        "on_approve": "STATE_DISCOVERY_RENDER",
+        "on_reject": "STATE_DISCOVERY_RENDER_DECLINED"
+      }
+    },
+    "STATE_DISCOVERY_RENDER": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "render_image_targets",
+      "transitions": {
+        "on_success": "STATE_DISCOVERY_SCOPING",
+        "on_failure": "STATE_DISCOVERY_SCOPING"
+      }
+    },
+    "STATE_DISCOVERY_RENDER_DECLINED": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "mark_render_declined",
+      "transitions": {
+        "on_success": "STATE_DISCOVERY_SCOPING",
+        "on_failure": "STATE_DISCOVERY_SCOPING"
+      }
+    },
+    "STATE_DISCOVERY_SCOPING": {
+      "type": "AGENT_TASK",
+      "phase": "discovery",
+      "step": "servers/phases/discovery/discovery_scope_2",
+      "instructions": "servers/phases/discovery/discovery_scope_2/instructions.md",
+      "expected_tool_call": "confirm_discovery_scope",
+      "transitions": {
+        "on_tool_call_received": "STATE_DISCOVERY_DATA_SCAN"
+      }
+    },
+    "STATE_DISCOVERY_DATA_SCAN": {
+      "type": "AGENT_TASK",
+      "phase": "discovery",
+      "step": "servers/phases/discovery/discovery_datascan_3",
+      "instructions": "servers/phases/discovery/discovery_datascan_3/instructions.md",
+      "expected_tool_call": "scan_data_dependencies",
+      "transitions": {
+        "on_tool_call_received": "STATE_DISCOVERY_DATA_REVIEW"
+      }
+    },
+    "STATE_DISCOVERY_DATA_REVIEW": {
+      "type": "AGENT_TASK",
+      "phase": "discovery",
+      "step": "servers/phases/discovery/discovery_datareview_3",
+      "instructions": "servers/phases/discovery/discovery_datareview_3/instructions.md",
+      "prompt_template": "The data-dependency scan for workspace '{workspace_name}' is recorded and reviewed. Approving fixes the workload-to-data-service mapping that extraction carries forward untouched: whichever consumers are attached now are the ones the assessment grades and the workload data gate holds an application team on at its ship gate — a service graded 'migrate' with no consumer attached holds nobody, because the gate cannot say whose it is. There is no later point where the mapping gets a second look, and extraction is the expensive step that follows. Any of these services can be left in AWS instead of migrated — a DynamoDB table or a bucket the GKE workload reaches across the cloud boundary is a supported outcome, recorded as 'keep-in-aws'; it buys cross-cloud connectivity, credentials and egress cost, and it does not hold up an application team. Corrections made here (rejected, attached, annotated, kept in AWS) are already durable and are replayed over every later scan; this approval is not, so a re-scan asks again. Declining leaves the review open for another round and persists nothing. Approve the data dependency mapping?",
+      "expected_tool_call": "confirm_data_dependencies",
+      "transitions": {
+        "on_approve": "STATE_DISCOVERY_RUNNING",
+        "on_reject": "STATE_DISCOVERY_DATA_REVIEW"
+      }
+    },
+    "STATE_DISCOVERY_RUNNING": {
+      "type": "AGENT_TASK",
+      "phase": "discovery",
+      "step": "servers/phases/discovery/discovery_extract_3",
+      "instructions": "servers/phases/discovery/discovery_extract_3/instructions.md",
+      "expected_tool_call": "run_discovery_extraction",
+      "transitions": {
+        "on_tool_call_received": "STATE_ASSESSMENT"
+      }
+    },
+
+    "STATE_ASSESSMENT": {
+      "type": "AGENT_TASK",
+      "phase": "assessment",
+      "step": "servers/phases/assessment/assessment_review_1",
+      "instructions": "servers/phases/assessment/assessment_review_1/instructions.md",
+      "knowledge": ["migration-assessment.md"],
+      "prompt_template": "Discovery is complete for workspace '{workspace_name}': the inventory and readiness report are ready for review. Approving accepts them and moves on — to blocker resolution if blockers were recorded, otherwise straight to landing zone design. Declining re-runs the discovery scan instead. Approve and proceed?",
+      "expected_tool_call": "submit_assessment",
+      "transitions": {
+        "on_amend_scope": "STATE_DISCOVERY_DATA_SCAN",
+        "on_reject": "STATE_DISCOVERY",
+        "on_blockers_found": "STATE_BLOCKER_RESOLUTION",
+        "on_no_blockers": "STATE_LZ_DESIGN"
+      }
+    },
+    "STATE_BLOCKER_RESOLUTION": {
+      "type": "AGENT_TASK",
+      "phase": "assessment",
+      "step": "servers/phases/assessment/assessment_blockers_2",
+      "instructions": "servers/phases/assessment/assessment_blockers_2/instructions.md",
+      "expected_tool_call": "assign_blocker_owner",
+      "transitions": {
+        "on_blockers_outstanding": "STATE_BLOCKER_RESOLUTION",
+        "on_unregistered_owner": "STATE_CONFIRM_NEW_MEMBER",
+        "on_all_blockers_owned": "STATE_LZ_DESIGN"
+      }
+    },
+    "STATE_CONFIRM_NEW_MEMBER": {
+      "type": "HITL_ELICITATION",
+      "prompt_template": "'{pending_owner_email}' is not registered in the ledger for workspace '{workspace_name}', so they cannot yet be recorded as a blocker owner. Which team are they on? Choose 'platform' to register them as a platform engineer (write access to platform/), or 'application' to register them as a developer.",
+      "transitions": {
+        "on_approve": "STATE_REGISTER_MEMBER",
+        "on_reject": "STATE_BLOCKER_RESOLUTION"
+      }
+    },
+    "STATE_REGISTER_MEMBER": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "register_ledger_member",
+      "transitions": {
+        "on_success": "STATE_BLOCKER_RESOLUTION",
+        "on_failure": "STATE_BLOCKER_RESOLUTION"
+      }
+    },
+
+    "STATE_LZ_DESIGN": {
+      "type": "AGENT_TASK",
+      "phase": "landingzone",
+      "step": "servers/phases/landingzone/landingzone_design_2",
+      "instructions": "servers/phases/landingzone/landingzone_design_2/instructions.md",
+      "knowledge": [
+        "gke-landing-zone.md",
+        "gke-compute-classes.md"
+      ],
+      "expected_tool_call": "finalize_landing_zone_design",
+      "transitions": {
+        "on_tool_call_received": "STATE_LZ_TRANSLATION_PLAN"
+      }
+    },
+    "STATE_LZ_TRANSLATION_PLAN": {
+      "type": "AGENT_TASK",
+      "phase": "landingzone",
+      "step": "servers/phases/landingzone/landingzone_translationplan_3",
+      "instructions": "servers/phases/landingzone/landingzone_translationplan_3/instructions.md",
+      "expected_tool_call": "plan_translation",
+      "transitions": {
+        "on_tool_call_received": "STATE_LZ_TRANSLATION_PLAN_REVIEW"
+      }
+    },
+    "STATE_LZ_TRANSLATION_PLAN_REVIEW": {
+      "type": "AGENT_TASK",
+      "phase": "landingzone",
+      "step": "servers/phases/landingzone/landingzone_planreview_4",
+      "instructions": "servers/phases/landingzone/landingzone_planreview_4/instructions.md",
+      "prompt_template": "The landing zone plan for workspace '{workspace_name}' is ready: the target-shape decisions, the landing-zone Terraform draft, and the translation unit plan. Approving fixes WHAT the translation phase will generate; nothing is validated or pushed yet — terraform validation and the PR happen after generation. Declining returns to landing zone design. Approve the plan?",
+      "expected_tool_call": "confirm_translation_plan",
+      "transitions": {
+        "on_approve": "STATE_TRANSLATION_RUNNING",
+        "on_reject": "STATE_LZ_DESIGN"
+      }
+    },
+    "STATE_TRANSLATION_RUNNING": {
+      "type": "AGENT_TASK",
+      "phase": "landingzone",
+      "step": "servers/phases/translation/translation_translate_1",
+      "instructions": "servers/phases/translation/translation_translate_1/instructions.md",
+      "expected_tool_call": "run_translation",
+      "transitions": {
+        "on_tool_call_received": "STATE_TRANSLATION_REVIEW"
+      }
+    },
+    "STATE_TRANSLATION_REVIEW": {
+      "type": "AGENT_TASK",
+      "phase": "landingzone",
+      "step": "servers/phases/translation/translation_humanreview_2",
+      "instructions": "servers/phases/translation/translation_humanreview_2/instructions.md",
+      "expected_tool_call": "approve_translation",
+      "transitions": {
+        "on_approve": "STATE_TRANSLATION_VALIDATE",
+        "on_retranslate": "STATE_TRANSLATION_RUNNING",
+        "on_revise_units": "STATE_TRANSLATION_RUNNING"
+      }
+    },
+    "STATE_TRANSLATION_VALIDATE": {
+      "type": "AGENT_TASK",
+      "phase": "landingzone",
+      "step": "servers/phases/translation/translation_validate_3",
+      "instructions": "servers/phases/translation/translation_validate_3/instructions.md",
+      "expected_tool_call": "run_generated_validation",
+      "transitions": {
+        "on_success": "STATE_TRANSLATION_APPROVED",
+        "on_failure": "STATE_TRANSLATION_REVIEW"
+      }
+    },
+    "STATE_TRANSLATION_APPROVED": {
+      "type": "HITL_ELICITATION",
+      "prompt_template": "The generated code for workspace '{workspace_name}' validated (terraform validate; manifest structure checks). Review the before/after comparison and per-unit tradeoffs in the Review UI, then approve to open the Pull Request in the target repository. Declining returns to the unit review.",
+      "transitions": {
+        "on_approve": "STATE_TRANSLATION_SUBMIT_PR",
+        "on_reject": "STATE_TRANSLATION_REVIEW"
+      }
+    },
+    "STATE_TRANSLATION_SUBMIT_PR": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "submit_lz_pr",
+      "transitions": {
+        "on_success": "STATE_DEPLOYMENT_INIT",
+        "on_failure": "STATE_TRANSLATION_VALIDATE"
+      }
+    },
+    "STATE_DEPLOYMENT_INIT": {
+      "type": "AGENT_TASK",
+      "phase": "deployment",
+      "step": "servers/phases/deployment/deployment_provision_1",
+      "instructions": "servers/phases/deployment/deployment_provision_1/instructions.md",
+      "expected_tool_call": "prepare_image_deployment",
+      "transitions": {
+        "on_tool_call_received": "STATE_DEPLOYMENT_PROVISION_AR"
+      }
+    },
+    "STATE_DEPLOYMENT_PROVISION_AR": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "provision_artifact_registry",
+      "transitions": {
+        "on_success": "STATE_DEPLOYMENT_IMAGE_REPLICATION",
+        "on_failure": "STATE_DEPLOYMENT_IMAGE_REPLICATION"
+      }
+    },
+    "STATE_DEPLOYMENT_IMAGE_REPLICATION": {
+      "type": "HITL_ELICITATION",
+      "prompt_template": "The Artifact Registry destination is prepared. The ECR images in the discovery inventory can now be replicated to it. Choose how: 'agent_mediated' — this server runs skopeo copies itself, using only credentials already present in your local environment (it checks they are present and reports what is missing; it never logs in or sets credentials up for you). 'self_service' (default) — the server writes a runbook of skopeo copy commands to the ledger for you to run with your own credentials; nothing here touches AWS. Declining skips replication entirely.",
+      "transitions": {
+        "on_approve": "STATE_DEPLOYMENT_REPLICATE_IMAGES",
+        "on_reject": "STATE_DEPLOYMENT_DATA_MIGRATION"
+      }
+    },
+    "STATE_DEPLOYMENT_REPLICATE_IMAGES": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "replicate_images",
+      "transitions": {
+        "on_success": "STATE_DEPLOYMENT_DATA_MIGRATION",
+        "on_failure": "STATE_DEPLOYMENT_INIT"
+      }
+    },
+    "STATE_DEPLOYMENT_DATA_MIGRATION": {
+      "type": "AGENT_TASK",
+      "phase": "deployment",
+      "step": "servers/phases/deployment/deployment_datamigration_2",
+      "instructions": "servers/phases/deployment/deployment_datamigration_2/instructions.md",
+      "knowledge": ["data-migration.md"],
+      "expected_tool_call": "complete_data_migration",
+      "transitions": {
+        "on_tool_call_received": "STATE_DEPLOYMENT_COMPLETED"
+      }
+    },
+    "STATE_DEPLOYMENT_COMPLETED": {
+      "type": "TERMINAL",
+      "status": "SUCCESS"
+    }
+  }
+}

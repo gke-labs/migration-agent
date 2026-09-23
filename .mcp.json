@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "migration-dag": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/servers/dag/mcp-server"
+    }
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "clusters": [
+    {
+      "name": "acme-prod",
+      "workloads": {
+        "namespaces": [
+          {
+            "name": "acme-shop",
+            "deployments": 3
+          }
+        ]
+      }
+    }
+  ],
+  "addons": [
+    {
+      "name": "karpenter"
+    }
+  ],
+  "autoscaling": {
+    "karpenter": true,
+    "cluster_autoscaler": false,
+    "evidence": [],
+    "karpenter_nodepools": [
+      {
+        "name": "shop-burst",
+        "kind": "NodePool",
+        "api_version": "karpenter.sh/v1beta1",
+        "requirements": [
+          {
+            "key": "kubernetes.io/arch",
+            "operator": "In",
+            "values": [
+              "amd64"
+            ]
+          },
+          {
+            "key": "karpenter.sh/capacity-type",
+            "operator": "In",
+            "values": [
+              "spot",
+              "on-demand"
+            ]
+          }
+        ],
+        "capacity_types": [
+          "spot",
+          "on-demand"
+        ],
+        "instance_families": [],
+        "architectures": [
+          "amd64"
+        ],
+        "requirements_unreduced": [],
+        "weight": null,
+        "taints": [],
+        "labels": {},
+        "limits": {
+          "cpu": "64"
+        },
+        "disruption": {
+          "consolidation_policy": "WhenUnderutilized",
+          "consolidate_after": null,
+          "expire_after": null,
+          "budgets": [],
+          "provisioner": null
+        },
+        "node_class_ref": {
+          "name": "default"
+        },
+        "source_files": [
+          "k8s/karpenter-nodepool.yaml"
+        ]
+      }
+    ]
+  },
+  "nodegroups": [
+    {
+      "name": "system"
+    }
+  ],
+  "workloads": {
+    "privileged_daemonsets": [
+      {
+        "name": "node-agent"
+      }
+    ],
+    "host_network": [
+      "acme-shop/node-agent"
+    ],
+    "irsa_bindings": [
+      "acme-shop/orders"
+    ]
+  },
+  "network": {
+    "vpc_peering": true,
+    "load_balancers": [
+      "frontend-alb"
+    ]
+  },
+  "storage": {
+    "ebs_csi": true,
+    "storage_classes": [
+      "gp3-encrypted"
+    ]
+  },
+  "triggers": {
+    "karpenter": true,
+    "privileged_daemonsets": true,
+    "gpu_tpu": false,
+    "vpc_peering": true
+  },
+  "cluster_dns": {
+    "sources": [
+      {
+        "kind": "configmap",
+        "name": "coredns",
+        "text": "x"
+      }
+    ]
+  }
+}

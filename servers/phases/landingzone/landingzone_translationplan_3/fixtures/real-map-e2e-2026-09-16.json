@@ -1,0 +1,65 @@
+{
+  "clusters": [
+    {
+      "name": "acme-prod",
+      "workloads": {
+        "namespaces": [
+          {
+            "name": "acme-shop",
+            "deployments": 3
+          }
+        ]
+      }
+    }
+  ],
+  "addons": [
+    {
+      "name": "karpenter"
+    }
+  ],
+  "autoscaling": {
+    "karpenter": true
+  },
+  "nodegroups": [
+    {
+      "name": "system"
+    }
+  ],
+  "workloads": {
+    "privileged_daemonsets": [
+      {
+        "name": "node-agent"
+      }
+    ],
+    "host_network": [
+      "acme-shop/node-agent"
+    ],
+    "irsa_bindings": [
+      "acme-shop/orders"
+    ]
+  },
+  "network": {
+    "vpc_peering": true,
+    "load_balancers": [
+      "frontend-alb"
+    ]
+  },
+  "storage": {
+    "ebs_csi": true,
+    "storage_classes": [
+      "gp3-encrypted"
+    ]
+  },
+  "triggers": {
+    "karpenter": true
+  },
+  "cluster_dns": {
+    "sources": [
+      {
+        "kind": "configmap",
+        "name": "coredns",
+        "text": "x"
+      }
+    ]
+  }
+}

@@ -1,0 +1,438 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Live Discovery IR",
+  "description": "The live scan's record of the running EKS estate (STATE_DISCOVERY_LIVE, discovery_livescan_0), written to platform/discovery/live/live_discovery.json with one CSV per table beside it. Code-authored end to end — the AWS cloud-plane walk (aws_live), one in-cluster walk per reachable cluster (k8s_live), the IRSA join between them — so the structure the walk owns is closed here: the cluster record, the in-cluster sections, and the reduced records the walk derives (nodes, IRSA bindings, counts). The objects inside those sections stay open: a Deployment's spec is Kubernetes' contract, not this one's. Every one of them is projected (projection.project): its structure and an allowlist of structural strings — names and references, images, classes, ports, drivers, scheduling contracts — with every other string value replaced by the `<omitted>` marker, so no free-form value a customer authored is in this record: what survives is an identifier, a reference, an enumeration, a scheduling or routing contract (a taint or toleration with key, value and effect; a hostname; a route path), a well-known platform label, a class/mode annotation or a StorageClass provisioning parameter. The AWS-side tag and label maps are key names with the same marker; a security group's free-text description is not recorded. One invariant is stated outright rather than left to code: a Secret record admits the marker under data/stringData and nothing else. Partial results are the contract — an unreachable cluster keeps its AWS-side record with kubernetes_error and no kubernetes section, and every omission is a note — so almost every leaf is nullable and only the identity fields are required.",
+  "type": "object",
+  "required": ["live_ir_version", "regions", "clusters", "notes", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "live_ir_version": {
+      "const": "2.0",
+      "description": "Bumped with any change to this shape (live_discovery.LIVE_IR_VERSION); unrelated to the platform DAG version."
+    },
+    "regions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The regions whose EKS clusters were listed, in the order named. A named region that could not be listed is in summary.regions_unreachable and a note; a scan in which no region listed is refused by the tool and never written."
+    },
+    "clusters": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/cluster" }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Every coverage gap the walk recorded, top-level and per-cluster (prefixed 'cluster <name>: '). Relayed verbatim to the operator."
+    },
+    "scanned_by": {
+      "type": ["string", "null"],
+      "description": "The AWS caller identity ARN the scan ran as (stamped by the tool, absent in the engine's own output)."
+    },
+    "summary": {
+      "type": "object",
+      "required": ["regions_scanned", "regions_unreachable", "clusters_found", "clusters_walked", "clusters_unreachable", "clusters_using_karpenter", "workload_totals", "note_count"],
+      "additionalProperties": false,
+      "properties": {
+        "regions_scanned": { "type": "integer", "description": "Regions whose clusters were listed — the length of regions, not the number the operator named." },
+        "regions_unreachable": { "type": "array", "items": { "type": "string" }, "description": "Named regions that could not be listed; each is also a note." },
+        "clusters_found": { "type": "integer" },
+        "clusters_walked": { "type": "integer" },
+        "clusters_unreachable": { "type": "array", "items": { "type": ["string", "null"] } },
+        "clusters_using_karpenter": { "type": "integer" },
+        "workload_totals": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "note_count": { "type": "integer" }
+      }
+    }
+  },
+  "$defs": {
+    "nullable_string": { "type": ["string", "null"] },
+    "nullable_integer": { "type": ["integer", "null"] },
+    "nullable_boolean": { "type": ["boolean", "null"] },
+    "string_list": { "type": "array", "items": { "type": ["string", "null"] } },
+    "string_map": {
+      "type": "object",
+      "additionalProperties": { "const": "<omitted>" },
+      "description": "Free-form customer text (tags, labels): key names only, every value the `<omitted>` marker (projection.keys_only)."
+    },
+    "configmap_record": {
+      "$ref": "#/$defs/manifest",
+      "description": "A ConfigMap projected like every object: its key names under data/binaryData, each with the `<omitted>` marker as its value and nothing else.",
+      "properties": {
+        "data": { "type": "object", "additionalProperties": { "const": "<omitted>" } },
+        "binaryData": { "type": "object", "additionalProperties": { "const": "<omitted>" } }
+      }
+    },
+    "taint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": { "$ref": "#/$defs/nullable_string" },
+        "value": { "$ref": "#/$defs/nullable_string" },
+        "effect": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "description": "A projected Kubernetes object (projection.project): status and runtime metadata dropped, the applied-configuration annotation dropped, apiVersion/kind stamped, and every string value outside the structural allowlist — a custom label or annotation value, an env literal, a command token, a probe path, a header match, a ConfigMap value — replaced by the `<omitted>` marker, while the route paths, taints, selectors and exact-key platform labels, annotations and StorageClass parameters a migration reproduces are kept. Open beyond its identity: the shape is Kubernetes' contract.",
+      "required": ["kind", "metadata"],
+      "properties": {
+        "apiVersion": { "$ref": "#/$defs/nullable_string" },
+        "kind": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "name": { "$ref": "#/$defs/nullable_string" },
+            "namespace": { "$ref": "#/$defs/nullable_string" }
+          }
+        }
+      }
+    },
+    "manifest_list": { "type": "array", "items": { "$ref": "#/$defs/manifest" } },
+    "secret_record": {
+      "$ref": "#/$defs/manifest",
+      "description": "A Secret projected like every object: its name, namespace, type and the key names under data/stringData, each with the `<omitted>` marker as its value — a member it still carries admits the marker and nothing else. Service-account tokens and Helm release secrets are skipped and counted in skipped_secrets instead.",
+      "required": ["kind", "metadata"],
+      "properties": {
+        "type": { "$ref": "#/$defs/nullable_string" },
+        "data": { "type": "object", "additionalProperties": { "const": "<omitted>" } },
+        "stringData": { "type": "object", "additionalProperties": { "const": "<omitted>" } }
+      }
+    },
+    "irsa_role": {
+      "type": "object",
+      "description": "The AWS side of an IRSA binding (aws_live.resolve_irsa_roles): whether the role still exists, whom its trust policy admits, what it grants. exists true carries the detail; exists false with error means IAM says the role is gone (the annotation dangles); exists null with error means the role could not be read — GetRole denied, the role in another account than the clusters, or the annotation not an IAM role ARN at all. All three are migration findings, not scan failures.",
+      "required": ["role_arn", "exists"],
+      "additionalProperties": false,
+      "properties": {
+        "role_arn": { "type": "string" },
+        "exists": { "type": ["boolean", "null"] },
+        "trusted_subjects": { "type": "array", "items": { "type": "string" } },
+        "attached_policies": { "$ref": "#/$defs/string_list" },
+        "inline_policy_names": { "$ref": "#/$defs/string_list" },
+        "error": { "type": "string" },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "irsa_binding": {
+      "type": "object",
+      "description": "A ServiceAccount carrying the eks.amazonaws.com/role-arn annotation. `role` is attached when AWS IAM could be read; absent, the binding stands on the annotation alone.",
+      "required": ["sa", "role_arn"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": { "$ref": "#/$defs/nullable_string" },
+        "sa": { "$ref": "#/$defs/nullable_string", "description": "The ServiceAccount's name — named for what it is, so a row never reads as the role's name." },
+        "role_arn": { "type": "string" },
+        "role": { "$ref": "#/$defs/irsa_role" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "description": "A live node reduced to the fields that shape capacity (k8s_live._nodes) — never a full Node manifest.",
+      "required": ["name", "taints", "allocatable"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/nullable_string" },
+        "instance_type": { "type": "string" },
+        "zone": { "type": "string" },
+        "arch": { "type": "string" },
+        "nodegroup": { "type": "string" },
+        "karpenter_nodepool": { "type": "string" },
+        "capacity_type_eks": { "type": "string" },
+        "capacity_type_karpenter": { "type": "string" },
+        "taints": { "type": "array", "items": { "$ref": "#/$defs/taint" } },
+        "allocatable": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "$ref": "#/$defs/nullable_string" },
+            "memory": { "$ref": "#/$defs/nullable_string" }
+          }
+        },
+        "kubelet_version": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "kubernetes": {
+      "type": "object",
+      "description": "One cluster's in-cluster walk (k8s_live.discover_cluster). Namespaced sections respect the walk's namespace scope; cluster-scoped ones (nodes, PVs, StorageClasses, IngressClasses, Karpenter and Gateway API classes, the Namespace list) never do.",
+      "required": ["notes", "namespaces", "workloads", "autoscaling", "networking", "identity", "storage", "config", "nodes", "bare_pods", "pod_count", "images_running", "counts"],
+      "additionalProperties": false,
+      "properties": {
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "server_version": { "type": "string" },
+        "namespaces": { "$ref": "#/$defs/manifest_list" },
+        "workloads": {
+          "type": "object",
+          "required": ["Deployment", "StatefulSet", "DaemonSet", "CronJob"],
+          "additionalProperties": { "$ref": "#/$defs/manifest_list" }
+        },
+        "autoscaling": {
+          "type": "object",
+          "required": ["hpas", "karpenter"],
+          "additionalProperties": false,
+          "properties": {
+            "hpas": { "$ref": "#/$defs/manifest_list" },
+            "karpenter": {
+              "type": "object",
+              "required": ["nodepools", "provisioners", "node_classes"],
+              "additionalProperties": false,
+              "properties": {
+                "nodepools": { "$ref": "#/$defs/manifest_list" },
+                "provisioners": { "$ref": "#/$defs/manifest_list" },
+                "node_classes": { "$ref": "#/$defs/manifest_list" }
+              }
+            }
+          }
+        },
+        "networking": {
+          "type": "object",
+          "required": ["services", "ingresses", "ingress_classes", "gateway_api", "istio", "traefik"],
+          "additionalProperties": false,
+          "properties": {
+            "services": { "$ref": "#/$defs/manifest_list" },
+            "ingresses": { "$ref": "#/$defs/manifest_list" },
+            "ingress_classes": { "$ref": "#/$defs/manifest_list" },
+            "gateway_api": {
+              "type": "object",
+              "required": ["gateway_classes", "gateways", "http_routes"],
+              "additionalProperties": false,
+              "properties": {
+                "gateway_classes": { "$ref": "#/$defs/manifest_list" },
+                "gateways": { "$ref": "#/$defs/manifest_list" },
+                "http_routes": { "$ref": "#/$defs/manifest_list" }
+              }
+            },
+            "istio": {
+              "type": "object",
+              "required": ["gateways", "virtual_services"],
+              "additionalProperties": false,
+              "properties": {
+                "gateways": { "$ref": "#/$defs/manifest_list" },
+                "virtual_services": { "$ref": "#/$defs/manifest_list" }
+              }
+            },
+            "traefik": {
+              "type": "object",
+              "required": ["ingress_routes", "middlewares"],
+              "additionalProperties": false,
+              "properties": {
+                "ingress_routes": { "$ref": "#/$defs/manifest_list" },
+                "middlewares": { "$ref": "#/$defs/manifest_list" }
+              }
+            }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "required": ["service_accounts", "irsa"],
+          "additionalProperties": false,
+          "properties": {
+            "service_accounts": { "$ref": "#/$defs/manifest_list" },
+            "irsa": { "type": "array", "items": { "$ref": "#/$defs/irsa_binding" } }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "required": ["pvcs", "pvs", "storage_classes"],
+          "additionalProperties": false,
+          "properties": {
+            "pvcs": { "$ref": "#/$defs/manifest_list" },
+            "pvs": { "$ref": "#/$defs/manifest_list" },
+            "storage_classes": { "$ref": "#/$defs/manifest_list" }
+          }
+        },
+        "config": {
+          "type": "object",
+          "required": ["configmaps", "secrets", "skipped_secrets", "skipped_configmaps", "external_secrets"],
+          "additionalProperties": false,
+          "properties": {
+            "configmaps": { "type": "array", "items": { "$ref": "#/$defs/configmap_record" }, "description": "Projected: key names under data/binaryData with every value the `<omitted>` marker. Helm's configmap-driver release records (sh.helm.release.v1.*) are skipped and counted in skipped_configmaps." },
+            "secrets": { "type": "array", "items": { "$ref": "#/$defs/secret_record" } },
+            "skipped_secrets": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Secrets left out by type, counted: service_account_tokens, helm_releases." },
+            "skipped_configmaps": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "ConfigMaps left out by kind, counted: helm_releases (Helm's configmap storage driver)." },
+            "external_secrets": {
+              "type": "object",
+              "description": "Values held outside the cluster (External Secrets Operator, Secrets Store CSI): store names and the remote object names spelled as fields (remoteRef.key, a secretObjects entry's objectName), never a resolved value; the Secrets Store CSI parameters.objects YAML is a free-form string and is the marker.",
+              "required": ["external_secrets", "secret_stores", "cluster_secret_stores", "secret_provider_classes"],
+              "additionalProperties": false,
+              "properties": {
+                "external_secrets": { "$ref": "#/$defs/manifest_list" },
+                "secret_stores": { "$ref": "#/$defs/manifest_list" },
+                "cluster_secret_stores": { "$ref": "#/$defs/manifest_list" },
+                "secret_provider_classes": { "$ref": "#/$defs/manifest_list" }
+              }
+            }
+          }
+        },
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+        "bare_pods": { "$ref": "#/$defs/manifest_list", "description": "Pods with no ownerReferences — invisible to any controller inventory." },
+        "pod_count": { "type": "integer" },
+        "images_running": { "type": "array", "items": { "type": "string" }, "description": "Every image a pod in scope actually runs — the drift signal against what the workloads declare." },
+        "counts": { "type": "object", "additionalProperties": { "type": "integer" } }
+      }
+    },
+    "addon": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "$ref": "#/$defs/nullable_string" },
+        "status": { "$ref": "#/$defs/nullable_string" },
+        "service_account_role_arn": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "nodegroup": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "status": { "$ref": "#/$defs/nullable_string" },
+        "capacity_type": { "$ref": "#/$defs/nullable_string", "description": "ON_DEMAND or SPOT." },
+        "instance_types": { "$ref": "#/$defs/string_list" },
+        "ami_type": { "$ref": "#/$defs/nullable_string" },
+        "release_version": { "$ref": "#/$defs/nullable_string" },
+        "disk_size_gb": { "$ref": "#/$defs/nullable_integer" },
+        "scaling": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min": { "$ref": "#/$defs/nullable_integer" },
+            "max": { "$ref": "#/$defs/nullable_integer" },
+            "desired": { "$ref": "#/$defs/nullable_integer" }
+          }
+        },
+        "labels": { "$ref": "#/$defs/string_map" },
+        "taints": { "type": "array", "items": { "$ref": "#/$defs/taint" } },
+        "subnet_ids": { "$ref": "#/$defs/string_list" },
+        "node_role_arn": { "$ref": "#/$defs/nullable_string" },
+        "launch_template": { "$ref": "#/$defs/nullable_string" },
+        "asg_names": { "$ref": "#/$defs/string_list" }
+      }
+    },
+    "autoscaling_group": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/nullable_string" },
+        "min": { "$ref": "#/$defs/nullable_integer" },
+        "max": { "$ref": "#/$defs/nullable_integer" },
+        "desired": { "$ref": "#/$defs/nullable_integer" },
+        "running_instances": { "type": "integer", "description": "Live instance count — the one number the nodegroup's scaling intent cannot give." },
+        "availability_zones": { "$ref": "#/$defs/string_list" }
+      }
+    },
+    "subnet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subnet_id": { "$ref": "#/$defs/nullable_string" },
+        "availability_zone": { "$ref": "#/$defs/nullable_string" },
+        "cidr_block": { "$ref": "#/$defs/nullable_string" },
+        "available_ips": { "$ref": "#/$defs/nullable_integer" },
+        "public": { "$ref": "#/$defs/nullable_boolean" },
+        "tags": { "$ref": "#/$defs/string_map" }
+      }
+    },
+    "security_group": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "group_id": { "$ref": "#/$defs/nullable_string" },
+        "group_name": { "$ref": "#/$defs/nullable_string", "description": "An identifier; the group's free-text description is not recorded." },
+        "ingress_rule_count": { "type": "integer" },
+        "egress_rule_count": { "type": "integer" }
+      }
+    },
+    "network": {
+      "type": "object",
+      "description": "The cluster VPC's layout. Route tables are deliberately a count and ids only: GKE's topology comes from subnet IP allocation and Cloud NAT, so their contents inform nothing the translation generates.",
+      "required": ["vpc", "subnets", "security_groups", "route_tables"],
+      "additionalProperties": false,
+      "properties": {
+        "vpc": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "vpc_id": { "type": "string" },
+                "cidr_blocks": { "$ref": "#/$defs/string_list" }
+              }
+            }
+          ]
+        },
+        "subnets": { "type": "array", "items": { "$ref": "#/$defs/subnet" } },
+        "security_groups": { "type": "array", "items": { "$ref": "#/$defs/security_group" } },
+        "route_tables": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "count": { "type": "integer" },
+            "ids": { "$ref": "#/$defs/string_list" }
+          }
+        }
+      }
+    },
+    "load_balancer": {
+      "type": "object",
+      "description": "An ALB/NLB the AWS Load Balancer Controller created for this cluster, attributed by its controller tag.",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/nullable_string" },
+        "arn": { "$ref": "#/$defs/nullable_string" },
+        "type": { "$ref": "#/$defs/nullable_string", "description": "application or network." },
+        "scheme": { "$ref": "#/$defs/nullable_string" },
+        "dns_name": { "$ref": "#/$defs/nullable_string" },
+        "vpc_id": { "$ref": "#/$defs/nullable_string" },
+        "ingress_group": { "$ref": "#/$defs/nullable_string", "description": "The ingress.k8s.aws/stack tag — which Ingress group owns it." },
+        "service": { "$ref": "#/$defs/nullable_string", "description": "The kubernetes.io/service-name tag — which LoadBalancer Service owns it." }
+      }
+    },
+    "cluster": {
+      "type": "object",
+      "description": "One EKS cluster: its AWS-side record (aws_live) and, when the control plane answered, its in-cluster walk under `kubernetes`. When it did not, `kubernetes_error` says why and `kubernetes` is absent — the AWS-side record stands either way.",
+      "required": ["name", "region"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "arn": { "$ref": "#/$defs/nullable_string" },
+        "status": { "$ref": "#/$defs/nullable_string" },
+        "kubernetes_version": { "$ref": "#/$defs/nullable_string" },
+        "platform_version": { "$ref": "#/$defs/nullable_string" },
+        "endpoint": { "$ref": "#/$defs/nullable_string" },
+        "certificate_authority_data": { "$ref": "#/$defs/nullable_string", "description": "The public CA bundle (base64), as `aws eks describe-cluster` returns it; needed to reach the endpoint, not a secret." },
+        "endpoint_access": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "public": { "$ref": "#/$defs/nullable_boolean" },
+            "private": { "$ref": "#/$defs/nullable_boolean" },
+            "public_access_cidrs": { "$ref": "#/$defs/string_list" }
+          }
+        },
+        "oidc_issuer": { "$ref": "#/$defs/nullable_string" },
+        "logging_enabled": { "$ref": "#/$defs/string_list" },
+        "tags": { "$ref": "#/$defs/string_map" },
+        "vpc": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vpc_id": { "$ref": "#/$defs/nullable_string" },
+            "subnet_ids": { "$ref": "#/$defs/string_list" },
+            "security_group_ids": { "$ref": "#/$defs/string_list" },
+            "cluster_security_group_id": { "$ref": "#/$defs/nullable_string" }
+          }
+        },
+        "addons": { "type": "array", "items": { "$ref": "#/$defs/addon" } },
+        "nodegroups": { "type": "array", "items": { "$ref": "#/$defs/nodegroup" } },
+        "autoscaling_groups": { "type": "array", "items": { "$ref": "#/$defs/autoscaling_group" } },
+        "network": { "$ref": "#/$defs/network" },
+        "load_balancers": { "type": "array", "items": { "$ref": "#/$defs/load_balancer" } },
+        "kubernetes_error": { "type": "string" },
+        "kubernetes": { "$ref": "#/$defs/kubernetes" }
+      }
+    }
+  }
+}

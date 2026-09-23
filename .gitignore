@@ -1,0 +1,57 @@
+# GKE Agentic Migration runs
+
+gke-agentic-migration-output/
+*.local.md
+*.local.yaml
+
+# Target-repo clones the landing zone phase writes into, one per run
+
+servers/dag/scratch/
+
+# Terraform
+
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+
+# Editors / OS
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets
+
+*.pem
+*.key
+*.crt
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+
+dist/
+build/
+node_modules/
+__pycache__/
+*.pyc
+.env
+
+# Python virtualenvs (servers/dag/.venv, tests/.venv, tests/.venv-agy)
+
+.venv/
+.venv-agy/
+
+# Local Antigravity workspace MCP registration (machine-specific absolute paths;
+# copy .agents/mcp_config.json.example and fill in your paths)
+
+.agents/mcp_config.json

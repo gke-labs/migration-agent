@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workspace Registry Schema",
+  "type": "object",
+  "properties": {
+    "workspace_name": { "type": "string" },
+    "gcp_project": { "type": "string" },
+    "ledger_bucket": { "type": "string" },
+    "minimum_agent_version": { "type": "string" },
+    "roles": {
+      "type": "object",
+      "properties": {
+        "admins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "identity": { "type": "string" } },
+            "required": ["identity"]
+          }
+        },
+        "platform_engineers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "identity": { "type": "string" } },
+            "required": ["identity"]
+          }
+        },
+        "developers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "identity": { "type": "string" },
+              "assigned_components": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["identity"]
+          }
+        }
+      }
+    }
+  },
+  "required": ["workspace_name", "gcp_project", "ledger_bucket"],
+  "additionalProperties": false
+}

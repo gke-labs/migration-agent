@@ -1,0 +1,100 @@
+{
+  "name": "GKE Agentic Migration - Developer Workload DAG",
+  "version": "0.4",
+  "description": "Per-component developer graph. v0.3 adds the execution slice — STATE_WKLD_TRANSLATE -> REVIEW -> VALIDATE -> APPROVED (HITL ship gate) -> SUBMIT_PR -> DONE, the ladder's FIRST TERMINAL — and retires STATE_WKLD_AWAIT_PIPELINE (v0.2 copies parked there map to STATE_WKLD_TRANSLATE via STATE_MAPPINGS at re-join; server/workload_join.py, DESIGN 6.3). STATE_WKLD_REVIEW also declares on_replan -> STATE_WKLD_PLAN: the plan's exports_stamp is the operand of reuse conjunct (d) and of every unit blob's stamp, and only plan_workload_translation can rebuild it, so without this edge an exports.json bump after planning would be unclearable (retranslating re-writes the same stale stamp and validate keeps refusing). STATE_WKLD_VALIDATE declares BOTH edges (on_success -> APPROVED, on_failure -> REVIEW); STATE_WKLD_SUBMIT_PR's on_failure returns to APPROVED — a DELIBERATE divergence from the platform graph, where a PR failure re-validates: a workload PR failure invalidates nothing the manifest gates checked, so the retry re-raises the ship approval directly. v0.4 makes the wkld-routing family live (HTTPRoutes whose parentRefs come verbatim from exports.gateway) and adds the graph's first GUARDED mapping: STATE_WKLD_DONE -> STATE_WKLD_TRANSLATE when has_unparkable_units — the component has parked units AND exports.gateway now carries a complete name/namespace. Unlike the v0.2 -> v0.3 mappings, a guarded entry is a STANDING re-entry rule, not a one-shot version upgrade: it is re-evaluated on every join at the bundled version, so a component that reached DONE before the platform Gateway published re-enters when it publishes. Re-entry only unparks routing; if anything outside exports.gateway also moved, translate refuses the unpark and sends the component down the on_replan edge instead (server/workload_join.py, DESIGN 6.3).",
+  "start_state": "STATE_WKLD_SCOPE",
+  "states": {
+    "STATE_WKLD_SCOPE": {
+      "type": "AGENT_TASK",
+      "phase": "workload",
+      "step": "servers/phases/workload/workload_scope_1",
+      "instructions": "servers/phases/workload/workload_scope_1/instructions.md",
+      "expected_tool_call": "submit_workload_scope",
+      "transitions": { "on_tool_call_received": "STATE_WKLD_SCOPE_CONFIRM" }
+    },
+    "STATE_WKLD_SCOPE_CONFIRM": {
+      "type": "AGENT_TASK",
+      "phase": "workload",
+      "step": "servers/phases/workload/workload_scopeconfirm_2",
+      "instructions": "servers/phases/workload/workload_scopeconfirm_2/instructions.md",
+      "expected_tool_call": "confirm_workload_scope",
+      "prompt_template": "Component '{component}': approve the proposed file scope? The proposal, counts and any cluster-scoped-kind warnings are in the tool output above. Rejecting returns to scope selection.",
+      "transitions": {
+        "on_tool_call_received": "STATE_WKLD_PLAN",
+        "on_reject": "STATE_WKLD_SCOPE"
+      }
+    },
+    "STATE_WKLD_PLAN": {
+      "type": "AGENT_TASK",
+      "phase": "workload",
+      "step": "servers/phases/workload/workload_plan_2",
+      "instructions": "servers/phases/workload/workload_plan_2/instructions.md",
+      "expected_tool_call": "plan_workload_translation",
+      "transitions": { "on_tool_call_received": "STATE_WKLD_PLAN_REVIEW" }
+    },
+    "STATE_WKLD_PLAN_REVIEW": {
+      "type": "AGENT_TASK",
+      "phase": "workload",
+      "step": "servers/phases/workload/workload_planreview_4",
+      "instructions": "servers/phases/workload/workload_planreview_4/instructions.md",
+      "expected_tool_call": "confirm_workload_plan",
+      "prompt_template": "Component '{component}': approve the workload translation plan? The unit/family/status summary (including parked and placeholder units) is in the tool output above. Rejecting returns to planning.",
+      "transitions": {
+        "on_tool_call_received": "STATE_WKLD_TRANSLATE",
+        "on_reject": "STATE_WKLD_PLAN"
+      }
+    },
+    "STATE_WKLD_TRANSLATE": {
+      "type": "AGENT_TASK",
+      "phase": "workload",
+      "step": "servers/phases/workload/workload_translate_3",
+      "instructions": "servers/phases/workload/workload_translate_3/instructions.md",
+      "expected_tool_call": "run_workload_translation",
+      "transitions": { "on_tool_call_received": "STATE_WKLD_REVIEW" }
+    },
+    "STATE_WKLD_REVIEW": {
+      "type": "AGENT_TASK",
+      "phase": "workload",
+      "step": "servers/phases/workload/workload_review_4",
+      "instructions": "servers/phases/workload/workload_review_4/instructions.md",
+      "expected_tool_call": "approve_workload_translation",
+      "transitions": {
+        "on_approve": "STATE_WKLD_VALIDATE",
+        "on_revise_units": "STATE_WKLD_TRANSLATE",
+        "on_retranslate": "STATE_WKLD_TRANSLATE",
+        "on_replan": "STATE_WKLD_PLAN"
+      }
+    },
+    "STATE_WKLD_VALIDATE": {
+      "type": "AGENT_TASK",
+      "phase": "workload",
+      "step": "servers/phases/workload/workload_validate_5",
+      "instructions": "servers/phases/workload/workload_validate_5/instructions.md",
+      "expected_tool_call": "run_workload_validation",
+      "transitions": {
+        "on_success": "STATE_WKLD_APPROVED",
+        "on_failure": "STATE_WKLD_REVIEW"
+      }
+    },
+    "STATE_WKLD_APPROVED": {
+      "type": "HITL_ELICITATION",
+      "prompt_template": "Component '{component}': ship the validated Kubernetes manifests as a Pull Request? The unit summary, tradeoffs, parked units and open questions are in the tool output above; the validation report and before/after comparisons are in the ledger under workloads/{component}/. Approving opens the per-component PR branch; declining returns to the unit review.",
+      "transitions": {
+        "on_approve": "STATE_WKLD_SUBMIT_PR",
+        "on_reject": "STATE_WKLD_REVIEW"
+      }
+    },
+    "STATE_WKLD_SUBMIT_PR": {
+      "type": "INTERNAL_TASK_SERVER_MUTATION",
+      "action": "submit_workload_pr",
+      "transitions": {
+        "on_success": "STATE_WKLD_DONE",
+        "on_failure": "STATE_WKLD_APPROVED"
+      }
+    },
+    "STATE_WKLD_DONE": {
+      "type": "TERMINAL",
+      "status": "SUCCESS"
+    }
+  }
+}

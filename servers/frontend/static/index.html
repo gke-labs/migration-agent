@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GKE Agentic Migration — Migration Review</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div id="brand">
+      <span class="logo">GKE Agentic Migration</span>
+      <span id="dag-name" class="muted"></span>
+    </div>
+    <div id="status-chips">
+      <span id="mode-badge" class="chip"></span>
+      <span id="current-chip" class="chip current"></span>
+    </div>
+    <div id="who">
+      <div id="who-user"></div>
+      <div id="who-role" class="muted"></div>
+    </div>
+  </header>
+
+  <nav id="tabs">
+    <button class="tab active" data-tab="dag" type="button">Migration</button>
+    <button class="tab" data-tab="audit" type="button">Audit</button>
+  </nav>
+
+  <div id="error-banner" hidden></div>
+
+  <main id="view-dag">
+    <section id="dag-panel">
+      <div id="step-head">
+        <p class="muted">Select a step in the DAG to see its details.</p>
+      </div>
+      <div class="panel-title">
+        <span>Migration DAG</span>
+        <span id="updated-at" class="muted"></span>
+      </div>
+      <div id="dag-legend">
+        <span class="legend-item"><span class="legend-swatch done"></span>done</span>
+        <span class="legend-item"><span class="legend-swatch here"></span>you are here</span>
+        <span class="legend-item"><span class="legend-swatch upcoming"></span>upcoming</span>
+      </div>
+      <div id="dag-scroll"><svg id="dag-svg"></svg></div>
+    </section>
+
+    <section id="detail-panel">
+      <div id="detail-content">
+        <p class="muted">Artifacts for the selected step appear here.</p>
+      </div>
+    </section>
+  </main>
+
+  <section id="view-audit" hidden>
+    <div id="audit-panel">
+      <div class="panel-title">
+        <span>Audit — actions taken</span>
+        <span id="audit-note" class="muted"></span>
+      </div>
+      <div id="audit-list"></div>
+    </div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
